@@ -16,8 +16,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.support.v4.util.LruCache;
 import android.widget.ImageView;
- 
-/**
+ /**
  * Klasa za cache Slika za prikaz. Nije dovršeno keširanje na disk, tj čiščenje
  * i ograničavanje veličine a napravio sam vlastito keširanje jer je bilo
  * problema sa implementacijom DiskLruCache
