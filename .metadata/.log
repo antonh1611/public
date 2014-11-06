@@ -8,3 +8,15 @@ Command-line arguments:  -data /media/ext/eclipse/workspacePublic -os linux -ws 
 
 !ENTRY com.android.ide.eclipse.adt 4 0 2014-11-06 11:35:01.632
 !MESSAGE Failed to load properties file for project 'bla'
+
+!ENTRY org.eclipse.egit.core 4 0 2014-11-06 11:38:02.605
+!MESSAGE An exception occurred during push on URI file:////media/ext/eclipse/workspacePublic-git: file:////media/ext/eclipse/workspacePublic-git: not found.
+!STACK 0
+org.eclipse.jgit.errors.NoRemoteRepositoryException: file:////media/ext/eclipse/workspacePublic-git: not found.
+	at org.eclipse.jgit.transport.TransportLocal$1.open(TransportLocal.java:131)
+	at org.eclipse.jgit.transport.TransportBundleFile$1.open(TransportBundleFile.java:106)
+	at org.eclipse.jgit.transport.Transport.open(Transport.java:560)
+	at org.eclipse.jgit.transport.Transport.open(Transport.java:531)
+	at org.eclipse.egit.core.op.PushOperation.run(PushOperation.java:192)
+	at org.eclipse.egit.ui.internal.push.ConfirmationPage$2.run(ConfirmationPage.java:206)
+	at org.eclipse.jface.operation.ModalContext$ModalContextThread.run(ModalContext.java:122)
