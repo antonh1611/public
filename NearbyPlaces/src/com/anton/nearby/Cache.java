@@ -1,0 +1,275 @@
+package com.anton.nearby;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.util.concurrent.Semaphore;
+
+import android.annotation.SuppressLint;
+import android.app.ActivityManager;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Bitmap.CompressFormat;
+import android.graphics.BitmapFactory;
+import android.os.AsyncTask;
+import android.os.Build;
+import android.os.Environment;
+import android.support.v4.util.LruCache;
+import android.widget.ImageView;
+
+/**
+ * Klasa za cache Slika za prikaz. Nije dovršeno keširanje na disk, tj čiščenje
+ * i ograničavanje veličine a napravio sam vlastito keširanje jer je bilo
+ * problema sa implementacijom DiskLruCache
+ */
+public class Cache {
+	private static final int BYTE_TO_MB = 1024 * 1024;
+	private static final String IMAGE_FOLDER = "images";
+	/**
+	 * Path do Foldera za spremanje slika na vanjskoj pohrani
+	 */
+	public final String EXTERNAL_PATH;
+
+	private LruCache<String, Bitmap> lruCache;
+	private final int maxCache;
+	private final File cacheDir;
+	private float displayDensity;
+	private Semaphore semaphore;
+
+	public Cache(Context context, float displayDensity) {
+
+		cacheDir = context.getCacheDir();
+		this.displayDensity = displayDensity;
+		File external = new File(Environment.getExternalStorageDirectory(),
+				"Pictures");
+		external.mkdirs();
+		this.EXTERNAL_PATH = external.getAbsolutePath();
+
+		// Ograničiti ću broj paralelnih downloada na 3 za slučaj da se koristi
+		// sporija internet veza
+		semaphore = new Semaphore(3, true);
+		int memClass = ((ActivityManager) context
+				.getSystemService(Context.ACTIVITY_SERVICE)).getMemoryClass();
+
+		// izracunavam max memoriju za Cache (ukupno 1/6 vm allocated)
+		maxCache = memClass * BYTE_TO_MB / 6;
+		lruCache = new LruCache<String, Bitmap>(maxCache) {
+			@SuppressLint("NewApi")
+			@Override
+			protected int sizeOf(String key, Bitmap bitmap) {
+
+				// Default bitmap.getByteCount() je dodan tek u API 12 pa moram
+				// za manje to sam izračunati
+				if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB_MR1) {
+					return bitmap.getByteCount();
+				} else {
+					return bitmap.getRowBytes() * bitmap.getHeight();
+				}
+			}
+		};
+
+	}
+
+	/**
+	 * postavlja bitmap u ImageView asinkrono
+	 */
+	public void setImageFromCache(String key, ImageView img) {
+
+		img.setTag(key);
+		Bitmap b = lruCache.get(key);
+		if (b == null) {
+			// Stavljam null tako da se ne prikazuje prethodna slika s obzirom
+			// da se view ponovno koristi, pa ću asinkrono postaviti image
+			img.setImageBitmap(null);
+			new DownloadImage().execute(img);
+		} else {
+			img.setImageBitmap(b);
+		}
+
+	}
+
+	/**
+	 * Kešira bitmap u fajl
+	 * 
+	 * @param key
+	 * @param bitmap
+	 * @param filePath
+	 */
+	private void saveBitmapToFile(String key, final Bitmap bitmap,
+			String filePath) {
+		File keyFile = new File(key);
+		final File target = new File(filePath, keyFile.getName());
+		target.getParentFile().mkdirs();
+		new Thread(new Runnable() {
+
+			@Override
+			public void run() {
+
+				if (target.exists()) {
+					return;
+				}
+				try {
+
+					ByteArrayOutputStream bos = new ByteArrayOutputStream();
+					bitmap.compress(CompressFormat.PNG, 0, bos);
+					byte[] bitmapdata = bos.toByteArray();
+					target.getParentFile().mkdirs();
+					target.createNewFile();
+					FileOutputStream fos = new FileOutputStream(target);
+					fos.write(bitmapdata);
+					fos.close();
+				} catch (Exception e) {
+					Tools.logW(e.getMessage());
+				}
+
+			}
+		}).start();
+
+	}
+
+	/**
+	 * kešira bitmap u unutarnju memoriju
+	 * 
+	 * @param key
+	 * @param bitmap
+	 */
+	private void saveBitmapToInternal(String key, final Bitmap bitmap) {
+		saveBitmapToFile(key, bitmap, cacheDir + "/" + IMAGE_FOLDER);
+	}
+
+	/**
+	 * kešira bitmap u vanjsku memoriju
+	 * 
+	 * @param key
+	 * @param bitmap
+	 */
+	private void saveBitmapToExternal(String key, final Bitmap bitmap) {
+		File folder = new File(EXTERNAL_PATH);
+		folder.mkdirs();
+		saveBitmapToFile(key, bitmap, EXTERNAL_PATH);
+	}
+
+	/**
+	 * Vraća sliku iz fajla
+	 * 
+	 * @param key
+	 * @return
+	 */
+	public Bitmap getBitmapFromFile(String key) {
+
+		Bitmap b = null;
+		File tmp = new File(key);
+		if (tmp.getName().endsWith("-thumb")) {
+			File f = new File(cacheDir, IMAGE_FOLDER + "/" + tmp.getName());
+			if (f.exists()) {
+				b = BitmapFactory.decodeFile(f.getAbsolutePath());
+				lruCache.put(key, b);
+			}
+
+		} else {
+			File f = new File(EXTERNAL_PATH, tmp.getName());
+			if (f.exists()) {
+				b = BitmapFactory.decodeFile(f.getAbsolutePath());
+			}
+		}
+
+		return b;
+
+	}
+
+	/**
+	 * Stvara mali thumbnail za prikaz u listi
+	 * 
+	 * @param b
+	 * @return
+	 */
+	public Bitmap thumb(Bitmap b) {
+		// Izračunavam omjer za smanjivanje
+		int newHeight = (int) (50 * displayDensity);
+		float scaleRatio = ((float) newHeight) / b.getHeight();
+		int newWidth = (int) (b.getWidth() * scaleRatio);
+		return Bitmap.createScaledBitmap(b, newWidth, newHeight, false);
+
+	}
+
+	/**
+	 * Kešira sliku i stvara thumbnail
+	 * 
+	 * @param key
+	 * @param bitmap
+	 */
+	private void saveImageToDisk(String key, Bitmap bitmap) {
+
+		if (bitmap.getHeight() > 50 * displayDensity) {
+			saveBitmapToExternal(key, bitmap);
+			Bitmap thumb = thumb(bitmap);
+			saveBitmapToInternal(key + "-thumb", thumb);
+			lruCache.put(key + "-thumb", thumb);
+		} else {
+			saveBitmapToExternal(key, bitmap);
+			saveBitmapToInternal(key + "-thumb", bitmap);
+			lruCache.put(key + "-thumb", bitmap);
+		}
+
+	}
+
+	/**
+	 * AsyncTask za postavljanje i download slike tako da listView ne štuca
+	 * 
+	 * @author anton
+	 *
+	 */
+	private class DownloadImage extends AsyncTask<ImageView, Void, Bitmap> {
+		private ImageView imageView;
+
+		@Override
+		protected Bitmap doInBackground(ImageView... params) {
+			imageView = params[0];
+			String address = (String) imageView.getTag();
+			Bitmap bitmap = null;
+			bitmap = getBitmapFromFile(address);
+			if (bitmap != null) {
+				return bitmap;
+			}
+
+			boolean thumb = address.endsWith("-thumb");
+			if (thumb) {
+				address = address.replace("-thumb", "");
+			}
+			try {
+				semaphore.acquire();
+			} catch (Exception e) {
+
+			}
+			if (!Tools.isUrl(address)) {
+				File f = new File(address);
+				if (f.exists()) {
+					bitmap = BitmapFactory.decodeFile(address);
+				}
+
+			} else {
+				Communication com = new Communication();
+				bitmap = com.downloadBitmap(address);
+			}
+			semaphore.release();
+			if (bitmap != null) {
+				saveImageToDisk(address, bitmap);
+				if (thumb) {
+					// Ukoliko thumb nije bio keširan, spriječavam vračanje
+					// velike slike prvi put dok se thumb ne spremi
+					return thumb(bitmap);
+				}
+			}
+
+			return bitmap;
+		}
+
+		@Override
+		protected void onPostExecute(Bitmap result) {
+			imageView.setImageBitmap(result);
+			super.onPostExecute(result);
+		}
+
+	};
+
+}
